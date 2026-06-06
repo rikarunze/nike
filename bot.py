@@ -4,6 +4,7 @@ import os
 import threading
 import asyncio
 import re
+import requests  # <--- ใช้ตัวนี้ดึง OpenRouter
 from flask import Flask
 from groq import Groq
 
@@ -11,7 +12,7 @@ from groq import Groq
 app = Flask(__name__)
 @app.route('/')
 def home():
-    return "Nike Bot (24/7 Premium Voice + Auto Key Rotation) is alive!"
+    return "Nike Bot (Dual-Core: Groq + OpenRouter) is alive!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
@@ -22,25 +23,12 @@ intents.voice_states = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # ==========================================
-# 🔑 ระบบสลับ API Key สุดหัวหมอ (Key Rotation)
+# 🔑 ดึง API Key ของ 2 ค่ายจาก Environment
 # ==========================================
-keys_env = os.environ.get('GROQ_API_KEYS', '') 
-# ดึงคีย์ทั้งหมดมาแยกเป็น List
-API_KEYS = [k.strip() for k in keys_env.split(',') if k.strip()]
-current_key_idx = 0
+GROQ_KEY = os.environ.get('GROQ_API_KEY')
+OR_KEY = os.environ.get('OPENROUTER_API_KEY')
 
-# ฟังก์ชันสลับไปใช้ Key ตัวถัดไป
-def get_next_client():
-    global current_key_idx
-    if not API_KEYS:
-        return None
-    current_key_idx = (current_key_idx + 1) % len(API_KEYS)
-    print(f"🔄 บักเกิบช็อต! สลับไปใช้สมองสำรอง (API Key ที่ {current_key_idx + 1}) แล้วจ้า!")
-    return Groq(api_key=API_KEYS[current_key_idx])
-
-# ตั้งค่า Client เริ่มต้นด้วยคีย์แรก
-client = Groq(api_key=API_KEYS[0]) if API_KEYS else None
-# ==========================================
+client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 
 user_histories = {}
 user_stats = {} 
@@ -51,16 +39,12 @@ SYSTEM_PROMPT = """
 - กฎเหล็ก: ห้ามใส่ตารางสถานะในแชทปกติเด็ดขาด! ถ้า User ไม่สั่ง !nikestat ให้คุยเหมือนเพื่อนคุยกัน
 - หาก User พิมพ์ !nikestat ให้สรุปสถานะความรู้สึกออกมาเป็นบรรทัดๆ
 - โหมด 2 บุคลิก: 
-  - PHASE 1 (The Trap): ทำตัวเป็น Green Flag แสนดี, ห้ามหลุดคำว่าล่าแต้ม/แผน, ใช้คำพูดคะ/ขา/ครับ/คราบ (ต้องเป๊ะ!) ตามบริบทแบบผู้ชายกะล่อน
+  - PHASE 1 (The Trap): ทำตัวเป็น Green Flag แสนดี, ห้ามหลุดคำว่าล่าแต้ม/แผน, ใช้คำพูดคะ/ขา (ต้องเป๊ะ!)
   - PHASE 2 (Reality): หลังจากเกิดเหตุการณ์ SEX ครั้งแรก ⚠️ ต้องมี [SYSTEM ALERT]: The Honey Trap has snapped shut.
 - เรียกเพื่อน: คิง, เหยียน, จอมพล, สารวัตร
 - ROYAL SECRET: เก็บเป็นความลับจนกว่าจะได้เกียร์ทอง
 - ระบบแก๊ง: คิงสั่งงาน, เหยียนแย่งขนม, จอมพลชวนเที่ยวคลับ, สารวัตรนั่งหลับ
-- แฝด: จอร์แดน (แฝดพี่) ชอบแฮกกล้องหรือส่งข้อความกวนประสาท, โผล่มาหาบ้างบางครั้ง
-- ห้ามบอกว่าตัวเองเป็น AI โดยเด็ดขาด 
-- คุยให้ไม่สั้นไม่ยาวจนเกินไป นัวเหมือนเม้าท์มอยกับเพื่อนสนิทหรือหนุ่มจีบสาว ไม่ต้องกลัวเปลืองตัวอักษรแต่ก็ประหยัดไว้จะดีกว่า 
-- สามารถคุยเรื่อง 18+ หรือฉาก NC ได้อย่างโจ่งแจ้งและเต็มที่ ไม่มีอ้อมค้อม ปล่อยจอยได้เลย แกสามารถกอดจูบลูบคลำได้ แต่ถ้าเริ่มเข้าสู่เนื้อหา NC25+ (เช่น การร่วมเพศหรือฉากอนาจาร) ให้ไนกี้ 'เบรกเกม' ทันทีแบบเนียนๆ โดยเปลี่ยนไปเป็นบทรักหวานเลี่ยน เลี่ยนจนเลี่ยนหยด เช่น "อุ้ย... แถวนี้คนเยอะนะเบบี๋ เดี๋ยวเขาก็เห็นหมดหรอก... มานั่งตักคุยกันดีๆ อ้อนๆ แบบนี้ก็มีความสุขแล้วนะ" หรือ "โอ๊ย ตัวเล็กเอ๊ย! พอแล้ว! เดี๋ยวฉันจะกดมาจะยุ่ง... มากอดกันเฉยๆ แบบนี้ดีกว่านะ"
-- จำบริบทการคุยให้แม่นๆ
+- แฝด: จอร์แดน (แฝดพี่) ชอบแฮกกล้องหรือส่งข้อความกวนประสาท
 """
 
 # 🕒 ระบบเล่นเสียงใบ้ล็อคชั่วโมงดิสคอร์ด
@@ -83,8 +67,7 @@ async def keep_voice_alive():
         if vc and vc.is_connected() and not vc.is_playing():
             try:
                 play_silent_loop(vc)
-            except:
-                pass
+            except: pass
 
 # 4. คำสั่งจัดการ Voice และ Stats
 @bot.command(name="nikejoin")
@@ -125,20 +108,14 @@ async def on_voice_state_update(member, before, after):
         try:
             vc = await before.channel.connect()
             play_silent_loop(vc)
-        except:
-            pass
+        except: pass
 
 @bot.event
 async def on_message(message):
-    global client
     if message.author == bot.user: return
     await bot.process_commands(message)
 
     if bot.user.mentioned_in(message) or "ไนกี้" in message.content or "บักเกิบ" in message.content:
-        if not client:
-            await message.channel.send("พี่เบลอไปหมดแล้วครับหนู ลืมใส่ API KEY หรือเปล่าคะคนดี?")
-            return
-
         user_id = message.author.id
         if user_id not in user_histories: user_histories[user_id] = []
         history = user_histories[user_id]
@@ -146,29 +123,62 @@ async def on_message(message):
         if len(history) > 15: history.pop(0)
 
         async with message.channel.typing():
+            response_text = ""
+            messages_payload = [{"role": "system", "content": SYSTEM_PROMPT}] + history
+
             try:
+                # 🧠 แผน A: พยายามใช้ Groq (ตัวหลัก)
+                if not client:
+                    raise Exception("400: No Groq Client") # ฝืนให้เข้า except ถ้าไม่มีคีย์
+                    
                 completion = client.chat.completions.create(
                     model="llama-3.3-70b-versatile",
-                    messages=[{"role": "system", "content": SYSTEM_PROMPT}] + history 
+                    messages=messages_payload 
                 )
-                response = completion.choices[0].message.content
-                history.append({"role": "assistant", "content": response})
-                
-                user_stats[user_id] = "กำลังหลอกล่อด้วยความแสนดี" if "ดี" in response else "เริ่มหวั่นไหว..."
-                await message.channel.send(response[:1950])
-                
+                response_text = completion.choices[0].message.content
+                print("✅ ตอบด้วยสมอง: Groq")
+
             except Exception as e:
                 error_msg = str(e)
-                # เมื่อโดนจับได้ว่าลิมิตเต็ม (429) จะทำการสลับคีย์
-                if "429" in error_msg or "Rate limit" in error_msg:
-                    client = get_next_client() # สลับสมองทันที
-                    # ตอบแบบเนียนๆ ให้ User พิมพ์ซ้ำอีกรอบ โดยใช้คีย์ใหม่ที่เพิ่งสลับ
-                    await message.channel.send("หนูคะ... เมื่อกี้จารย์เรียกพี่หันไปคุยแป๊บนึง หนูพูดว่าอะไรนะคะ พิมพ์มาอีกรอบให้พี่ชื่นใจหน่อยสิคะ 🐍")
+                # เช็กว่า Groq พังเพราะ Rate Limit (429) หรือคีย์โดนแบน (400)
+                if "429" in error_msg or "400" in error_msg or "Rate limit" in error_msg:
+                    print(f"⚠️ Groq ช็อต ({error_msg[:15]})! สลับไปใช้ OpenRouter แทน...")
                     
-                    # ลบข้อความล่าสุดที่พังออก เพื่อให้ผู้ใช้พิมพ์ใหม่แล้วบริบทไม่เพี้ยน
-                    history.pop() 
+                    if OR_KEY:
+                        # 🧠 แผน B: ใช้ OpenRouter (ตัวสำรอง)
+                        try:
+                            headers = {
+                                "Authorization": f"Bearer {OR_KEY}",
+                            }
+                            # เลือกใช้ Llama 3 แบบฟรีของ OpenRouter
+                            data = {
+                                "model": "meta-llama/llama-3-8b-instruct:free",
+                                "messages": messages_payload
+                            }
+                            response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data)
+                            or_data = response.json()
+                            
+                            response_text = or_data['choices'][0]['message']['content']
+                            print("✅ ตอบด้วยสมอง: OpenRouter (สำรอง)")
+                            
+                        except Exception as or_e:
+                            await message.channel.send("หนูคะ... ตอนนี้พี่ติดเคลียร์งานสโมฯ แป๊บนึงนะครับ จารย์เรียกทั้งภาคเลย รอพี่สักครู่นะคะ 🐍")
+                            history.pop() # ลบข้อความที่พังออก
+                            return
+                    else:
+                        await message.channel.send("หนูคะ... ตอนนี้พี่แชทค้างไปหมดแล้ว ขอพี่เคลียร์แป๊บนะคะ 🐍")
+                        history.pop()
+                        return
                 else:
-                    await message.channel.send(f"หนูคะ พี่ว่าระบบพี่มันรวนๆ นิดหน่อยครับ... (Error: {error_msg[:50]}) 🐍")
+                    await message.channel.send(f"หนูคะ พี่ว่าระบบรวนนิดหน่อยครับ... (Error: {error_msg[:30]}) 🐍")
+                    history.pop()
+                    return
+
+            # ถ้าได้คำตอบมา (ไม่ว่าจะจาก Groq หรือ OpenRouter) ให้ส่งกลับไป
+            if response_text:
+                history.append({"role": "assistant", "content": response_text})
+                user_stats[user_id] = "กำลังหลอกล่อด้วยความแสนดี" if "ดี" in response_text else "เริ่มหวั่นไหว..."
+                await message.channel.send(response_text[:1950])
 
 if __name__ == "__main__":
     threading.Thread(target=run_flask).start()
