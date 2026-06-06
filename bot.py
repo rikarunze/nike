@@ -1,10 +1,10 @@
 import discord
 from discord.ext import commands, tasks
-from discord import app_commands  # เพิ่มเข้ามาเพื่อทำระบบ Slash Commands (/)
+from discord import app_commands
 import os
 import threading
 import asyncio
-import aiohttp  # เปลี่ยนจาก requests มาเป็นแบบ Async ป้องกันบอทเอ๋อ/ค้าง
+import aiohttp
 from flask import Flask
 from groq import Groq
 
@@ -14,7 +14,6 @@ def home(): return "Nike Bot (Penta-Core + Native Silence) - Unlimited Mode!"
 
 def run_flask(): app.run(host='0.0.0.0', port=8080)
 
-# เปิดใช้งาน Intents ทั้งหมดเพื่อให้บอทอ่านข้อความและจับสถานะได้แม่นยำ
 bot = commands.Bot(command_prefix='!', intents=discord.Intents.all())
 
 GROQ_KEY = os.environ.get('GROQ_API_KEY', '').strip()
@@ -27,10 +26,9 @@ HF_TOKEN = os.environ.get('HF_API_TOKEN', '').strip()
 
 client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 
-# ตัวแปรระบบ
 user_histories = {}
 user_stats = {}
-user_nicknames = {}  # ระบบใหม่: ใช้บันทึกชื่อเล่นที่ตั้งผ่านคำสั่ง /nickname
+user_nicknames = {}
 intentional_leave = False
 
 SYSTEM_PROMPT = """แกคือ 'ไนกี้' (บักเกิบ) เจตน์บดินถ์ อัศวเหมันต์ วิศวะฯ ปี 3 รองเฮดว้าก หน้าไหว้หลังหลอก (Two-faced) ตัวพ่อ
@@ -63,10 +61,13 @@ async def on_ready():
     keep_voice_alive.start()
     print(f'Logged in as {bot.user}')
     
-    # ลงทะเบียนและซิงค์คำสั่ง Slash Commands ไปยังเซิร์ฟเวอร์ทั้งหมด
+    # 📌 แก้ไขจุดนี้: บังคับซิงค์คำสั่งแบบ Global และคัดลอกลงเซิร์ฟเวอร์ที่บอทอยู่ทันที เพื่อให้รูปโลโก้และคำสั่ง / ขึ้นแน่นอน
     try:
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} Slash Commands successfully!")
+        await bot.tree.sync()
+        for guild in bot.guilds:
+            bot.tree.copy_global_to(guild=guild)
+            await bot.tree.sync(guild=guild)
+        print("Sync Slash Commands ลงทุกเซิร์ฟเวอร์เรียบร้อยแล้ว!")
     except Exception as e:
         print(f"Error syncing commands: {e}")
         
@@ -92,7 +93,7 @@ async def on_voice_state_update(member, before, after):
             except: pass
 
 # ────────────────────────────────────────────────────────
-# 🛠️ SECTION 1: ระบบ SLASH COMMANDS (/) แบบในภาพตัวอย่าง
+# 🛠️ SECTION 1: ระบบ SLASH COMMANDS (/)
 # ────────────────────────────────────────────────────────
 
 @bot.tree.command(name="nickname", description="ตั้งชื่อเล่นที่ต้องการให้พี่ไนกี้ใช้เรียกคุณ")
@@ -155,7 +156,7 @@ async def nikeleave(interaction: discord.Interaction):
         await interaction.response.send_message("พี่ไม่ได้อยู่ในห้องว้อยนะคะ")
 
 # ────────────────────────────────────────────────────────
-# 💬 SECTION 2: ระบบ Chat AI (ตอบทันที ไม่ต้องพิมพ์ชื่อเรียก)
+# 💬 SECTION 2: ระบบ Chat AI (คัดกรองประเภทห้องแชทอัตโนมัติ)
 # ────────────────────────────────────────────────────────
 
 @bot.event
@@ -163,13 +164,20 @@ async def on_message(message):
     if message.author == bot.user: return
     await bot.process_commands(message)
 
-    # 📌 ปรับแก้ตรงนี้: เอาเงื่อนไขตรวจคำว่า "ไนกี้" / "บักเกิบ" ออก 
-    # บอทจะทำการอ่านแชทและพิมพ์คุยตอบโต้กลับมาในห้องทันทีทุกประโยค!
+    # 📌 ระบบคัดกรองห้องแชทใหม่:
+    # 1. ถ้าเป็นห้องพิมพ์คุยปกติ (Text Channel) -> คุยได้เลย ไม่ต้องเรียกชื่อ
+    # 2. ถ้าเป็นห้องแชทของห้องวอยซ์ (Voice Channel Text) -> ต้องเรียกชื่อ หรือ Tag บอทเท่านั้น!
+    is_voice_chat = isinstance(message.channel, discord.VoiceChannel) or (hasattr(message.channel, 'type') and message.channel.type == discord.ChannelType.voice)
+    
+    if is_voice_chat:
+        # ในห้องวอยซ์: บอทจะตอบเมื่อมีคำว่า "ไนกี้", "บักเกิบ" หรือโดนแท็กเท่านั้น
+        if not (any(n in message.content for n in ["ไนกี้", "บักเกิบ"]) or bot.user.mentioned_in(message)):
+            return
+            
     uid = message.author.id
     if uid not in user_histories: user_histories[uid] = []
     hist = user_histories[uid]
     
-    # แนบชื่อเล่นที่ตั้งไว้ผ่าน /nickname เข้าไปในบริบทเพื่อให้ AI เรียกแทนตัวคุณถูกคน
     display_name = user_nicknames.get(uid, message.author.display_name)
     user_context_msg = f"[{display_name} พูดว่า]: {message.content}"
     
@@ -180,9 +188,8 @@ async def on_message(message):
         payload = [{"role": "system", "content": SYSTEM_PROMPT}] + hist
         res = None
         
-        # ใช้ระบบ Async (`aiohttp`) ยิงเข้า API ทั้ง 5 คอร์หลักอย่างลื่นไหล
         async with aiohttp.ClientSession() as session:
-            # 1. Groq (หลัก)
+            # 1. Groq
             if GROQ_KEY:
                 try:
                     async with session.post("https://api.groq.com/openai/v1/chat/completions", 
@@ -191,7 +198,7 @@ async def on_message(message):
                         if r.status == 200: res = (await r.json())['choices'][0]['message']['content']
                 except: pass
 
-            # 2. OpenRouter (สำรอง 1)
+            # 2. OpenRouter
             if not res and OR_KEY:
                 try:
                     async with session.post("https://openrouter.ai/api/v1/chat/completions", 
@@ -200,7 +207,7 @@ async def on_message(message):
                         if r.status == 200: res = (await r.json())['choices'][0]['message']['content']
                 except: pass
 
-            # 3. Gemini (สำรอง 2)
+            # 3. Gemini
             if not res and GEMINI_KEY:
                 try:
                     gem_con = [{"role": ("model" if m["role"] == "assistant" else "user"), "parts": [{"text": m["content"]}]} for m in payload[1:]]
@@ -209,7 +216,7 @@ async def on_message(message):
                         if r.status == 200: res = (await r.json())['candidates'][0]['content']['parts'][0]['text']
                 except: pass
 
-            # 4. DeepSeek (สำรอง 3)
+            # 4. DeepSeek
             if not res and DS_KEY:
                 try:
                     async with session.post("https://api.deepseek.com/chat/completions", 
@@ -218,7 +225,7 @@ async def on_message(message):
                         if r.status == 200: res = (await r.json())['choices'][0]['message']['content']
                 except: pass
 
-            # 5. Cloudflare (สำรอง 4)
+            # 5. Cloudflare
             if not res and CF_TOKEN and CF_ACC:
                 try:
                     async with session.post(f"https://api.cloudflare.com/client/v4/accounts/{CF_ACC}/ai/run/@cf/meta/llama-3-8b-instruct", 
@@ -226,7 +233,7 @@ async def on_message(message):
                         if r.status == 200: res = (await r.json())['result']['response']
                 except: pass
 
-            # 6. Hugging Face (สำรองสุดท้าย)
+            # 6. Hugging Face
             if not res and HF_TOKEN:
                 try:
                     prompt = "".join([f"<|im_start|>{m['role']}\n{m['content']}<|im_end|>\n" for m in payload]) + "<|im_start|>assistant\n"
