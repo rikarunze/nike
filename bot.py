@@ -164,13 +164,9 @@ async def on_message(message):
     if message.author == bot.user: return
     await bot.process_commands(message)
 
-    # 📌 ระบบคัดกรองห้องแชทใหม่:
-    # 1. ถ้าเป็นห้องพิมพ์คุยปกติ (Text Channel) -> คุยได้เลย ไม่ต้องเรียกชื่อ
-    # 2. ถ้าเป็นห้องแชทของห้องวอยซ์ (Voice Channel Text) -> ต้องเรียกชื่อ หรือ Tag บอทเท่านั้น!
     is_voice_chat = isinstance(message.channel, discord.VoiceChannel) or (hasattr(message.channel, 'type') and message.channel.type == discord.ChannelType.voice)
     
     if is_voice_chat:
-        # ในห้องวอยซ์: บอทจะตอบเมื่อมีคำว่า "ไนกี้", "บักเกิบ" หรือโดนแท็กเท่านั้น
         if not (any(n in message.content for n in ["ไนกี้", "บักเกิบ"]) or bot.user.mentioned_in(message)):
             return
             
@@ -195,8 +191,12 @@ async def on_message(message):
                     async with session.post("https://api.groq.com/openai/v1/chat/completions", 
                         headers={"Authorization": f"Bearer {GROQ_KEY}"}, 
                         json={"model": "llama-3.3-70b-versatile", "messages": payload}) as r:
-                        if r.status == 200: res = (await r.json())['choices'][0]['message']['content']
-                except: pass
+                        if r.status == 200: 
+                            res = (await r.json())['choices'][0]['message']['content']
+                        else:
+                            print(f"❌ Groq Error: Status {r.status} - {await r.text()}")
+                except Exception as e: 
+                    print(f"❌ Groq Exception: {e}")
 
             # 2. OpenRouter
             if not res and OR_KEY:
@@ -204,17 +204,30 @@ async def on_message(message):
                     async with session.post("https://openrouter.ai/api/v1/chat/completions", 
                         headers={"Authorization": f"Bearer {OR_KEY}"}, 
                         json={"model": "meta-llama/llama-3-8b-instruct:free", "messages": payload}) as r:
-                        if r.status == 200: res = (await r.json())['choices'][0]['message']['content']
-                except: pass
+                        if r.status == 200: 
+                            res = (await r.json())['choices'][0]['message']['content']
+                        else:
+                            print(f"❌ OpenRouter Error: Status {r.status} - {await r.text()}")
+                except Exception as e: 
+                    print(f"❌ OpenRouter Exception: {e}")
 
             # 3. Gemini
             if not res and GEMINI_KEY:
                 try:
-                    gem_con = [{"role": ("model" if m["role"] == "assistant" else "user"), "parts": [{"text": m["content"]}]} for m in payload[1:]]
+                    # ปรับแก้ระบบสลับ Role ให้ตรงกับมาตรฐานของ Google API อย่างเข้มงวด
+                    gem_con = []
+                    for m in hist:
+                        role_name = "model" if m["role"] == "assistant" else "user"
+                        gem_con.append({"role": role_name, "parts": [{"text": m["content"]}]})
+
                     async with session.post(f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}", 
                         json={"systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]}, "contents": gem_con}) as r:
-                        if r.status == 200: res = (await r.json())['candidates'][0]['content']['parts'][0]['text']
-                except: pass
+                        if r.status == 200: 
+                            res = (await r.json())['candidates'][0]['content']['parts'][0]['text']
+                        else:
+                            print(f"❌ Gemini Error: Status {r.status} - {await r.text()}")
+                except Exception as e: 
+                    print(f"❌ Gemini Exception: {e}")
 
             # 4. DeepSeek
             if not res and DS_KEY:
@@ -222,25 +235,42 @@ async def on_message(message):
                     async with session.post("https://api.deepseek.com/chat/completions", 
                         headers={"Authorization": f"Bearer {DS_KEY}"}, 
                         json={"model": "deepseek-chat", "messages": payload}) as r:
-                        if r.status == 200: res = (await r.json())['choices'][0]['message']['content']
-                except: pass
+                        if r.status == 200: 
+                            res = (await r.json())['choices'][0]['message']['content']
+                        else:
+                            print(f"❌ DeepSeek Error: Status {r.status} - {await r.text()}")
+                except Exception as e: 
+                    print(f"❌ DeepSeek Exception: {e}")
 
             # 5. Cloudflare
             if not res and CF_TOKEN and CF_ACC:
                 try:
                     async with session.post(f"https://api.cloudflare.com/client/v4/accounts/{CF_ACC}/ai/run/@cf/meta/llama-3-8b-instruct", 
                         headers={"Authorization": f"Bearer {CF_TOKEN}"}, json={"messages": payload}) as r:
-                        if r.status == 200: res = (await r.json())['result']['response']
-                except: pass
+                        if r.status == 200: 
+                            res = (await r.json())['result']['response']
+                        else:
+                            print(f"❌ Cloudflare Error: Status {r.status} - {await r.text()}")
+                except Exception as e: 
+                    print(f"❌ Cloudflare Exception: {e}")
 
             # 6. Hugging Face
             if not res and HF_TOKEN:
                 try:
-                    prompt = "".join([f"<|im_start|>{m['role']}\n{m['content']}<|im_end|>\n" for m in payload]) + "<|im_start|>assistant\n"
+                    # ปรับ Format ให้เข้ากับสไตล์ Llama 3 เผื่อยิงตรงเข้า Inference API
+                    prompt = ""
+                    for m in payload:
+                        prompt += f"<|start_header_id|>{m['role']}<|end_header_id|>\n{m['content']}<|eot_id|>"
+                    prompt += "<|start_header_id|>assistant<|end_header_id|>\n"
+                    
                     async with session.post("https://api-inference.huggingface.co/models/meta-llama/Meta-Llama-3-8B-Instruct", 
                         headers={"Authorization": f"Bearer {HF_TOKEN}"}, json={"inputs": prompt}) as r:
-                        if r.status == 200: res = (await r.json())[0]['generated_text'].split("<|im_start|>assistant")[-1].strip()
-                except: pass
+                        if r.status == 200: 
+                            res = (await r.json())[0]['generated_text'].split("<|start_header_id|>assistant<|end_header_id|>\n")[-1].replace("<|eot_id|>", "").strip()
+                        else:
+                            print(f"❌ Hugging Face Error: Status {r.status} - {await r.text()}")
+                except Exception as e: 
+                    print(f"❌ Hugging Face Exception: {e}")
 
         if res:
             hist.append({"role": "assistant", "content": res})
