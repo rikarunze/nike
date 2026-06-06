@@ -4,7 +4,7 @@ import os
 import threading
 import asyncio
 import re
-import requests  # <--- ใช้ตัวนี้ดึง OpenRouter
+import requests
 from flask import Flask
 from groq import Groq
 
@@ -12,7 +12,7 @@ from groq import Groq
 app = Flask(__name__)
 @app.route('/')
 def home():
-    return "Nike Bot (Dual-Core: Groq + OpenRouter) is alive!"
+    return "Nike Bot (Dual-Core Fixed Version) is alive!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
@@ -23,10 +23,15 @@ intents.voice_states = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # ==========================================
-# 🔑 ดึง API Key ของ 2 ค่ายจาก Environment
+# 🔑 ระบบดักจับ API Key (ฉลาดขึ้น ดักทุกทาง)
 # ==========================================
-GROQ_KEY = os.environ.get('GROQ_API_KEY')
+# ดักจับทั้ง GROQ_API_KEY หรือ GROQ_API_KEYS (เผื่อแกใส่แบบไหนมาก็ใช้ได้หมด)
+GROQ_KEY = os.environ.get('GROQ_API_KEY') or os.environ.get('GROQ_API_KEYS')
 OR_KEY = os.environ.get('OPENROUTER_API_KEY')
+
+# ล้างช่องว่างเผื่อก๊อปติดมา
+if GROQ_KEY: GROQ_KEY = GROQ_KEY.strip()
+if OR_KEY: OR_KEY = OR_KEY.strip()
 
 client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 
@@ -47,18 +52,23 @@ SYSTEM_PROMPT = """
 - แฝด: จอร์แดน (แฝดพี่) ชอบแฮกกล้องหรือส่งข้อความกวนประสาท
 """
 
-# 🕒 ระบบเล่นเสียงใบ้ล็อคชั่วโมงดิสคอร์ด
+# 🕒 ฟังก์ชันสำหรับเล่นเสียงใบ้แบบวนลูป (แก้บั๊ก No such file)
 def play_silent_loop(vc):
-    if not vc.is_playing():
-        source = discord.FFmpegPCMAudio(
-            "an_input_that_does_not_exist", 
-            before_options="-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=48000"
-        )
-        vc.play(source, after=lambda e: bot.loop.create_task(check_and_loop_voice(vc)))
+    if vc and vc.is_connected() and not vc.is_playing():
+        try:
+            # แก้ไขตรงนี้: ใช้ช่องทางตรง -i null เพื่อสร้างเสียงเงียบสนิท ไม่ต้องเรียกชื่อไฟล์มั่วซั่ว
+            source = discord.FFmpegPCMAudio(
+                "-",
+                before_options="-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=48000",
+                options="-f s16le"
+            )
+            vc.play(source, after=lambda e: bot.loop.create_task(check_and_loop_voice(vc)))
+        except Exception as e:
+            print(f"ขัดข้องตอนเปิดเสียงใบ้: {e}")
 
 async def check_and_loop_voice(vc):
-    await asyncio.sleep(1)
-    if vc.is_connected():
+    await asyncio.sleep(2) # เพิ่มเวลาหน่วงกันลูปนรกสแปม
+    if vc and vc.is_connected() and not vc.is_playing():
         play_silent_loop(vc)
 
 @tasks.loop(minutes=1)
@@ -67,6 +77,7 @@ async def keep_voice_alive():
         if vc and vc.is_connected() and not vc.is_playing():
             try:
                 play_silent_loop(vc)
+                print("🐍 บักเกิบล็อคสายเสียงเงียบ ปั๊มเวลาสะสมดิสหลักเรียบร้อย")
             except: pass
 
 # 4. คำสั่งจัดการ Voice และ Stats
@@ -129,7 +140,7 @@ async def on_message(message):
             try:
                 # 🧠 แผน A: พยายามใช้ Groq (ตัวหลัก)
                 if not client:
-                    raise Exception("400: No Groq Client") # ฝืนให้เข้า except ถ้าไม่มีคีย์
+                    raise Exception("400: No Groq Client Configured")
                     
                 completion = client.chat.completions.create(
                     model="llama-3.3-70b-versatile",
@@ -140,41 +151,33 @@ async def on_message(message):
 
             except Exception as e:
                 error_msg = str(e)
-                # เช็กว่า Groq พังเพราะ Rate Limit (429) หรือคีย์โดนแบน (400)
-                if "429" in error_msg or "400" in error_msg or "Rate limit" in error_msg:
-                    print(f"⚠️ Groq ช็อต ({error_msg[:15]})! สลับไปใช้ OpenRouter แทน...")
-                    
-                    if OR_KEY:
-                        # 🧠 แผน B: ใช้ OpenRouter (ตัวสำรอง)
-                        try:
-                            headers = {
-                                "Authorization": f"Bearer {OR_KEY}",
-                            }
-                            # เลือกใช้ Llama 3 แบบฟรีของ OpenRouter
-                            data = {
-                                "model": "meta-llama/llama-3-8b-instruct:free",
-                                "messages": messages_payload
-                            }
-                            response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data)
-                            or_data = response.json()
-                            
-                            response_text = or_data['choices'][0]['message']['content']
-                            print("✅ ตอบด้วยสมอง: OpenRouter (สำรอง)")
-                            
-                        except Exception as or_e:
-                            await message.channel.send("หนูคะ... ตอนนี้พี่ติดเคลียร์งานสโมฯ แป๊บนึงนะครับ จารย์เรียกทั้งภาคเลย รอพี่สักครู่นะคะ 🐍")
-                            history.pop() # ลบข้อความที่พังออก
-                            return
-                    else:
-                        await message.channel.send("หนูคะ... ตอนนี้พี่แชทค้างไปหมดแล้ว ขอพี่เคลียร์แป๊บนะคะ 🐍")
+                print(f"⚠️ Groq ช็อตด้วยอาการ ({error_msg[:30]})! สลับไปถาม OpenRouter...")
+                
+                # 🧠 แผน B: ใช้ OpenRouter (ตัวสำรอง)
+                if OR_KEY:
+                    try:
+                        headers = {
+                            "Authorization": f"Bearer {OR_KEY}",
+                        }
+                        data = {
+                            "model": "meta-llama/llama-3-8b-instruct:free",
+                            "messages": messages_payload
+                        }
+                        response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data)
+                        or_data = response.json()
+                        
+                        response_text = or_data['choices'][0]['message']['content']
+                        print("✅ ตอบด้วยสมอง: OpenRouter (สำรอง)")
+                        
+                    except Exception as or_e:
+                        await message.channel.send("หนูคะ... ตอนนี้พี่ติดงานด่วนที่ภาควิชาแป๊บนึงนะครับ รอพี่สักครู่นะคะคนดี 🐍")
                         history.pop()
                         return
                 else:
-                    await message.channel.send(f"หนูคะ พี่ว่าระบบรวนนิดหน่อยครับ... (Error: {error_msg[:30]}) 🐍")
+                    await message.channel.send("พี่เบลอไปหมดแล้วครับหนู ลืมเช็กค่า API KEY ในหน้าตั้งค่าหรือเปล่าคะคนดี? 🐍")
                     history.pop()
                     return
 
-            # ถ้าได้คำตอบมา (ไม่ว่าจะจาก Groq หรือ OpenRouter) ให้ส่งกลับไป
             if response_text:
                 history.append({"role": "assistant", "content": response_text})
                 user_stats[user_id] = "กำลังหลอกล่อด้วยความแสนดี" if "ดี" in response_text else "เริ่มหวั่นไหว..."
