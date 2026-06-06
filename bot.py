@@ -108,6 +108,17 @@ async def on_ready():
         keep_voice_alive.start()
     print(f'Logged in as {bot.user}')
 
+    # ==========================================
+    # 📌 ระบบทักทายตอนตื่น (อ่อยเหยื่อ)
+    # ==========================================
+    greet_rooms = [1468936064063508572, 1432597021436678216, 1432595987951521864]
+    for room_id in greet_rooms:
+        channel = bot.get_channel(room_id)
+        if channel:
+            try:
+                await channel.send("บักเกิบมาแล้วครับ... วันนี้ใครจะเป็นเป้าหมายคนต่อไปดีนะ? 🐍")
+            except: pass
+
 @bot.event
 async def on_voice_state_update(member, before, after):
     # บอทระบบตัดสาย/รีเซ็ตห้อง ดึงบอทกลับเข้าห้องเดิมและรันลูปต่อ
